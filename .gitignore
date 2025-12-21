@@ -1,0 +1,5 @@
+# data_demo_designbench/
+data_*/
+config/api.yaml
+.DS_Store
+__pycache__/

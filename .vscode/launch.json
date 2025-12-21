@@ -1,0 +1,44 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+
+        {
+            "name": "Debug Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+
+        {
+            "name": "Debug Current File (+PYTHONPATH)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "cwd": "${workspaceFolder}",
+            "env": { "PYTHONPATH": "${workspaceFolder}" },
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Python Debugger: With Arguments",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "cwd": "${workspaceFolder}",
+            "args": ["--test_arg1", "value1"],
+            "console": "integratedTerminal"
+        },
+        {
+           "name": "Python Debugger: Module",
+           "type": "debugpy",
+           "request": "launch",
+           "module": "module.name",
+           "cwd": "${workspaceFolder}",
+           "console": "integratedTerminal"
+        }
+    ]
+}
