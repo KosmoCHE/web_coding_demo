@@ -228,7 +228,6 @@ class BaseSynthesizer(ABC):
         existing_dirs = {item["directory"] for item in original_code}
         for f in modified_files:
             if f["directory"] not in existing_dirs:
-                # 从扩展名推断语言
                 result_code.append({
                     "directory": f["directory"],
                     "code": f["code"],

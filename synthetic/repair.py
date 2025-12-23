@@ -9,6 +9,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue
 from synthesizer import BaseSynthesizer
+import random
 
 # 破坏类型分类
 DEFECT_TYPES = [
@@ -91,7 +92,6 @@ The defect should be visually noticeable or functionally impactful.
 
 Return XML format with the following structure:
 <description>A clear, one-sentence instruction for the repair task (e.g., 'Fix the z-index issue causing the modal to be hidden behind content' or 'Restore proper contrast between text and background').</description>
-<defect_explanation>Brief explanation of what defect was injected and why it's problematic.</defect_explanation>
 <file path="path/to/file">
 The full content of the file with the injected defect
 </file>
@@ -145,7 +145,7 @@ Here is the clean code (which will be the Goal/Dst state after repair):
             import traceback
             traceback.print_exc()
             return None
-
+        
     def process_single_generation_entry(
         self,
         generation_entry: Dict,
@@ -341,9 +341,13 @@ def process_single_info_json(args):
     Returns:
         处理的任务数量
     """
-    full_path, original_folder_name, root, output_dir, synthesizer, defect_types = args
+    full_path, original_folder_name, root, output_dir, synthesizer, num_defect_types = args
+    
+    # 在每个线程中随机选择缺陷类型
+    selected_defect_types = random.sample(DEFECT_TYPES, min(num_defect_types, len(DEFECT_TYPES)))
 
     print(f"Processing {full_path}...")
+    print(f"  Selected defect types: {selected_defect_types}")
     try:
         with open(full_path, "r", encoding="utf-8") as f:
             gen_data = json.load(f)
@@ -353,7 +357,7 @@ def process_single_info_json(args):
             output_dir=output_dir,
             folder_name=original_folder_name,
             source_generation_dir=root,
-            defect_types=defect_types,
+            defect_types=selected_defect_types,
         )
         print(f"✓ Completed {full_path}: {len(new_tasks)} tasks")
         return len(new_tasks)
@@ -364,13 +368,13 @@ def process_single_info_json(args):
         return 0
 
 
-def main(max_workers=4, defect_types=None):
+def main(max_workers=4, num_defect_types=3):
     """
     主函数 - 多线程版本
 
     Args:
         max_workers: 最大线程数,默认为4
-        defect_types: 要生成的缺陷类型列表，默认为所有类型
+        num_defect_types: 每个任务随机选择的缺陷类型数量，默认为3
     """
     # Configuration
     input_dir = (
@@ -382,10 +386,7 @@ def main(max_workers=4, defect_types=None):
     base_url = config.api.base_url
     model = "claude-3-5-sonnet-coder"
 
-    synthesizer = RepairTaskSynthesizer(api_key, base_url, model, max_tokens=8192)
-    
-    if defect_types is None:
-        defect_types = DEFECT_TYPES
+    synthesizer = RepairTaskSynthesizer(api_key, base_url, model, max_tokens=32*1024)
 
     # 收集所有需要处理的文件
     tasks_to_process = []
@@ -401,13 +402,13 @@ def main(max_workers=4, defect_types=None):
                         root,
                         output_dir,
                         synthesizer,
-                        defect_types,
+                        num_defect_types,  # 传递数量而非已选择的类型
                     )
                 )
 
     print(f"Found {len(tasks_to_process)} generation folders to process")
     print(f"Using {max_workers} worker threads")
-    print(f"Defect types to generate: {defect_types}")
+    print(f"Each task will randomly select {num_defect_types} defect types")
 
     task_counter = 0
 
@@ -543,7 +544,7 @@ if __name__ == "__main__":
     # main(max_workers=5)
     
     # # 或者只运行部分缺陷类型
-    # main(max_workers=5, defect_types=["Occlusion", "Color Contrast", "Overflow"])
+    main(max_workers=5, num_defect_types=4)
 
     # # 或者测试单个文件夹
     # tasks = test_single_generation(
@@ -553,8 +554,8 @@ if __name__ == "__main__":
     # )
     
     # 或者测试单个缺陷类型
-    task = test_single_defect_type(
-        "/Users/pedestrian/Desktop/web_case/data_demo_renderbench/generation/1009769_www.kccworld.co.kr_english_",
-        "Occlusion",
-        "/Users/pedestrian/Desktop/web_case/data_demo_renderbench/repair_test"
-    )
+    # task = test_single_defect_type(
+    #     "/Users/pedestrian/Desktop/web_case/data_demo_renderbench/generation/1009769_www.kccworld.co.kr_english_",
+    #     "Occlusion",
+    #     "/Users/pedestrian/Desktop/web_case/data_demo_renderbench/repair_test"
+    # )
