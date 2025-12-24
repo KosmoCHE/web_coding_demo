@@ -9,6 +9,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue
 from synthesizer import BaseSynthesizer
+
 # Task Categories
 FORWARD_TASKS = [
     # "Responsive Adaptation",
@@ -17,9 +18,27 @@ FORWARD_TASKS = [
     "Element Modification",
     "Add Element",
     "Style Modification",
+    "Remove Element"
 ]
 
-REVERSE_TASKS = ["Remove Element"]
+# 每种任务类型的详细说明
+TASK_DESCRIPTIONS = {
+    "Function Modification": """Modify an existing JavaScript function or interaction behavior.
+    For example, change a click handler to show a different message, modify form validation logic, 
+    or update an animation timing.""",
+    
+    "Element Modification": """Modify an existing HTML element's content or attributes.
+    For example, change button text, update link href, modify image src, or change heading content.""",
+    
+    "Add Element": """Add a new HTML element to the page.
+    For example, add a new button, create a new section, insert a banner, or add a footer element.""",
+    
+    "Style Modification": """Modify CSS styles of existing elements.
+    For example, change colors, adjust spacing, modify fonts, update borders, or change layout properties.""",
+    
+    "Remove Element": """Remove an existing HTML element from the page.
+    For example, delete a popup, remove a banner, eliminate a button, or take out a section.""",
+}
 
 
 class EditTaskSynthesizer(BaseSynthesizer):
@@ -29,28 +48,42 @@ class EditTaskSynthesizer(BaseSynthesizer):
         策略1：前向演化
         现有代码(Generation) -> 源代码
         LLM修改它 -> 目标代码
+        使用 search/replace 模式
         """
         src_code_context = self.format_code_context(generation_data["dst_code"])
+        task_description = TASK_DESCRIPTIONS.get(task_type, "")
 
-        prompt =f"""You are an expert web developer. I have a codebase for a webpage.
+        prompt = f"""You are an expert web developer. I have a codebase for a webpage.
 I want to generate a dataset for web editing tasks.
+
 Current Task Type: {task_type}
 
+Task Instructions:
+{task_description}
+
 Please analyze the provided code and propose a specific, reasonable modification task that fits the '{task_type}' category.
-Then, implement the modification.
+Then, implement the modification using search/replace blocks.
 
 Return XML format with the following structure:
 <description>A clear, one-sentence instruction for the task (e.g., 'Change the button color to red' or 'Add a navigation bar').</description>
-<file path="path/to/file">
-The full content of the modified file
-</file>
-<file path="path/to/another/file">
-The full content of another modified file
-</file>
+<search_replace path="path/to/file">
+<search>
+exact text to find in the original file
+</search>
+<replace>
+replacement text with the modification applied
+</replace>
+</search_replace>
 
-Only include files that were actually modified.
-Do not include 'src' or 'dst' labels in the description, just the task instruction.
-Make sure the modifications is obvious enough in visual appearance to be noticed in screenshots.
+You can include multiple <search_replace> blocks if you need to modify multiple locations.
+
+Important:
+- The <search> block must contain the EXACT text from the original file (including whitespace and indentation).
+- The <replace> block contains the modified code.
+- Do not include 'src' or 'dst' labels in the description, just the task instruction.
+- Make sure the modifications are obvious enough in visual appearance to be noticed in screenshots.
+- Keep the search blocks as small as possible while still being unique in the file.
+
 Here is the source code:
 {src_code_context}"""
 
@@ -59,7 +92,7 @@ Here is the source code:
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a helpful assistant that generates web development datasets in XML format.",
+                        "content": "You are a helpful assistant that generates web development datasets in XML format using search/replace blocks.",
                     },
                     {"role": "user", "content": prompt},
                 ],
@@ -67,7 +100,8 @@ Here is the source code:
 
             result = response
             src_code = generation_data["dst_code"]
-            dst_code = self.merge_code_with_modifications(
+            # 使用 search/replace 应用修改
+            dst_code = self.apply_search_replace(
                 src_code, 
                 result.get("modified_files", [])
             )
@@ -80,74 +114,14 @@ Here is the source code:
                 "dst_code": dst_code,
                 "src_screenshot": generation_data.get("dst_screenshot", []),
                 "dst_screenshot": [],
-                "modified_files": result.get("modified_files", []),
+                "modified_files": result.get("modified_files", []),  # 记录 search/replace 块
                 "llm_raw_response": result.get("raw_response"),
                 "llm_metadata": result.get("llm_metadata"),
             }
         except Exception as e:
-            print(f"Error generating forward task: {e}")
-            return None
-    
-    def generate_reverse_task(self, generation_data: Dict, task_type: str) -> Dict:
-        """
-        策略2：缺陷注入/反向简化
-        现有代码(Generation) -> 目标代码（干净的结果）
-        LLM添加缺陷/元素 -> 源代码（起点）
-        """
-        dst_code_context = self.format_code_context(generation_data["dst_code"])
-
-        prompt = f"""You are an expert web developer. I have a clean, high-quality codebase for a webpage.
-I want to generate a dataset for '{task_type}' tasks (specifically removing elements).
-
-Please analyze the provided code and inject a "defect" or an extra element that a user would want to remove.
-For example, add a "Subscribe to Newsletter" popup that blocks content, or a redundant banner, or a deprecated button.
-
-Return XML format with the following structure:
-<description>A clear, one-sentence instruction for the removal task (e.g., 'Remove the newsletter popup' or 'Delete the promotional banner').</description>
-<file path="path/to/file">
-The full content of the file with the added element/defect
-</file>
-<file path="path/to/another/file">
-The full content of another modified file
-</file>
-
-Only include files that were modified, you must make actual code changes to reflect the added defect/element.
-Make sure the modifications is obvious enough in visual appearance to be noticed in screenshots.
-Here is the clean code (which will be the Goal/Dst state):
-{dst_code_context}"""
-
-        try:
-            response = self._create_chat_completion_with_retry(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a helpful assistant that generates web development datasets in XML format.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-            )
-
-            result = response
-            dst_code = generation_data["dst_code"]
-            src_code = self.merge_code_with_modifications(
-                dst_code,
-                result.get("modified_files", [])
-            )
-
-            return {
-                "task": "edit",
-                "task_type": [task_type],
-                "description": result["description"],
-                "src_code": src_code,
-                "dst_code": dst_code,
-                "src_screenshot": [],
-                "dst_screenshot": generation_data.get("dst_screenshot", []),
-                "modified_files": result.get("modified_files", []),
-                "llm_raw_response": result.get("raw_response"),
-                "llm_metadata": result.get("llm_metadata"),
-            }
-        except Exception as e:
-            print(f"Error generating reverse task: {e}")
+            print(f"Error generating forward task ({task_type}): {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def process_single_generation_entry(
@@ -156,34 +130,31 @@ Here is the clean code (which will be the Goal/Dst state):
         output_dir: str = None,
         folder_name: str = None,
         source_generation_dir: str = None,
+        forward_tasks: List[str] = None,
+        reverse_tasks: List[str] = None,
     ) -> List[Dict]:
+        """
+        处理单个 generation entry，为每种任务类型生成编辑任务
+        
+        Args:
+            generation_entry: 原始 generation 数据
+            output_dir: 输出目录
+            folder_name: 文件夹名称
+            source_generation_dir: 源 generation 目录
+            forward_tasks: 要生成的前向任务类型列表，默认为所有类型
+            reverse_tasks: 要生成的反向任务类型列表，默认为所有类型
+        """
         generated_tasks = []
         task_index = 0
 
+        # 如果没有指定任务类型，使用默认类型
+        if forward_tasks is None:
+            forward_tasks = FORWARD_TASKS
+
         # Forward Tasks
-        for fwd_task_type in FORWARD_TASKS:
+        for fwd_task_type in forward_tasks:
             print(f"Generating Forward Task: {fwd_task_type}")
             task = self.generate_forward_task(generation_entry, fwd_task_type)
-            if task:
-                generated_tasks.append(task)
-                # 立即保存
-                if output_dir and folder_name:
-                    task_type_suffix = (
-                        task["task_type"][0].lower().replace(" ", "_")
-                    )
-                    task_id = f"{folder_name}_{task_type_suffix}_{task_index}"
-                    save_edit_task(
-                        task,
-                        output_dir,
-                        task_id,
-                        source_generation_dir=source_generation_dir,
-                    )
-                task_index += 1
-
-        # Reverse Tasks
-        for rev_task_type in REVERSE_TASKS:
-            print(f"Generating Reverse Task: {rev_task_type}")
-            task = self.generate_reverse_task(generation_entry, rev_task_type)
             if task:
                 generated_tasks.append(task)
                 # 立即保存
@@ -223,7 +194,8 @@ def save_edit_task(
         │   ├── index.html
         │   └── resources/
         │       └── ...
-        └── info.json
+        ├── info.json
+        └── llm_log.json
 
     Args:
         task: The task dictionary containing src_code and dst_code
@@ -301,19 +273,19 @@ def save_edit_task(
 
     # Save src code files
     for file_info in task["src_code"]:
-        file_path = os.path.join(src_dir, file_info["directory"])
+        file_path = os.path.join(src_dir, file_info["path"])
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(file_info["code"])
 
     # Save dst code files
     for file_info in task["dst_code"]:
-        file_path = os.path.join(dst_dir, file_info["directory"])
+        file_path = os.path.join(dst_dir, file_info["path"])
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(file_info["code"])
 
-    # Prepare info.json (include full code content)
+    # Prepare info.json - 现在记录 modified_files (search/replace 块)
     info = {
         "task": task["task"],
         "task_type": task["task_type"],
@@ -333,11 +305,45 @@ def save_edit_task(
     info_path = os.path.join(task_dir, "info.json")
     with open(info_path, "w", encoding="utf-8") as f:
         json.dump(info, f, indent=2, ensure_ascii=False)
+    
     # Save llm_log.json
     llm_log_path = os.path.join(task_dir, "llm_log.json")
     with open(llm_log_path, "w", encoding="utf-8") as f:
         json.dump(llm_log, f, indent=2, ensure_ascii=False)
-    print(f"Saved task to {task_dir}")
+    
+    print(f"Saved edit task to {task_dir}")
+
+
+def process_single_info_json(args):
+    """
+    处理单个 info.json 文件的辅助函数
+
+    Args:
+        args: 包含参数的元组
+
+    Returns:
+        处理的任务数量
+    """
+    full_path, original_folder_name, root, output_dir, synthesizer = args
+
+    print(f"Processing {full_path}...")
+    try:
+        with open(full_path, "r", encoding="utf-8") as f:
+            gen_data = json.load(f)
+
+        new_tasks = synthesizer.process_single_generation_entry(
+            gen_data,
+            output_dir=output_dir,
+            folder_name=original_folder_name,
+            source_generation_dir=root,
+        )
+        print(f"✓ Completed {full_path}: {len(new_tasks)} tasks")
+        return len(new_tasks)
+    except Exception as e:
+        print(f"✗ Error processing {full_path}: {e}")
+        import traceback
+        traceback.print_exc()
+        return 0
 
 
 def main(max_workers=4):
@@ -357,9 +363,7 @@ def main(max_workers=4):
     base_url = config.api.base_url
     model = "claude-3-5-sonnet-coder"
 
-    # 注意: 每个线程需要自己的 synthesizer 实例以避免共享状态问题
-    # 但 OpenAI client 通常是线程安全的,所以我们可以共享一个 synthesizer
-    synthesizer = EditTaskSynthesizer(api_key, base_url, model)
+    synthesizer = EditTaskSynthesizer(api_key, base_url, model, max_tokens=32*1024)
 
     # 收集所有需要处理的文件
     tasks_to_process = []
@@ -407,14 +411,19 @@ def main(max_workers=4):
 
 
 def test_single_generation(
-    generation_folder: str, output_dir: str = None
+    generation_folder: str, 
+    output_dir: str = None,
+    forward_tasks: List[str] = None,
+    reverse_tasks: List[str] = None,
 ) -> List[Dict]:
     """
     测试函数:处理指定的单个 generation 文件夹
 
     Args:
-        generation_folder: generation 文件夹的路径,例如 "/path/to/generation/1009769_www.kccworld.co.kr_english_"
+        generation_folder: generation 文件夹的路径
         output_dir: 输出目录,如果为 None 则不保存文件,只返回结果
+        forward_tasks: 要生成的前向任务类型列表，默认为所有类型
+        reverse_tasks: 要生成的反向任务类型列表，默认为所有类型
 
     Returns:
         生成的 edit task 列表
@@ -423,14 +432,19 @@ def test_single_generation(
         # 只生成不保存
         tasks = test_single_generation("/path/to/generation/folder")
 
-        # 生成并保存
-        tasks = test_single_generation("/path/to/generation/folder", "/path/to/output")
+        # 生成并保存，只测试部分任务类型
+        tasks = test_single_generation(
+            "/path/to/generation/folder", 
+            "/path/to/output",
+            forward_tasks=["Style Modification"],
+            reverse_tasks=[]
+        )
     """
     config = OmegaConf.load("config/api.yaml")
     api_key = config.api.api_key
     base_url = config.api.base_url
-    model = "claude-3-5-sonnet-coder"  # Get model from config or use default
-    synthesizer = EditTaskSynthesizer(api_key, base_url, model)
+    model = "claude-3-5-sonnet-coder"
+    synthesizer = EditTaskSynthesizer(api_key, base_url, model, max_tokens=16*1024)
 
     info_path = os.path.join(generation_folder, "info.json")
 
@@ -450,6 +464,8 @@ def test_single_generation(
             output_dir=output_dir,
             folder_name=original_folder_name,
             source_generation_dir=generation_folder,
+            forward_tasks=forward_tasks,
+            reverse_tasks=reverse_tasks,
         )
 
         print(f"Generated {len(new_tasks)} edit tasks")
@@ -460,7 +476,7 @@ def test_single_generation(
             print(f"Type: {task['task_type']}")
             print(f"Description: {task['description']}")
             print(
-                f"Modified files: {[f['directory'] for f in task.get('modified_files', [])]}"
+                f"Modified files: {[f['path'] for f in task.get('modified_files', [])]}"
             )
 
         return new_tasks
@@ -468,50 +484,62 @@ def test_single_generation(
     except Exception as e:
         print(f"Error processing {info_path}: {e}")
         import traceback
-
         traceback.print_exc()
         return []
 
 
-def process_single_info_json(args):
+def test_single_task_type(
+    generation_folder: str,
+    task_type: str,
+    output_dir: str = None,
+) -> List[Dict]:
     """
-    处理单个 info.json 文件的辅助函数
+    测试单个任务类型的生成
 
     Args:
-        args: 包含 (full_path, original_folder_name, root, output_dir, synthesizer) 的元组
+        generation_folder: generation 文件夹的路径
+        task_type: 要测试的任务类型
+        output_dir: 输出目录
 
     Returns:
-        处理的任务数量
+        生成的 edit task 列表
     """
-    full_path, original_folder_name, root, output_dir, synthesizer = args
-
-    print(f"Processing {full_path}...")
-    try:
-        with open(full_path, "r", encoding="utf-8") as f:
-            gen_data = json.load(f)
-
-        new_tasks = synthesizer.process_single_generation_entry(
-            gen_data,
-            output_dir=output_dir,
-            folder_name=original_folder_name,
-            source_generation_dir=root,
+    if task_type in FORWARD_TASKS:
+        return test_single_generation(
+            generation_folder, 
+            output_dir, 
+            forward_tasks=[task_type],
+            reverse_tasks=[]
         )
-        print(f"✓ Completed {full_path}: {len(new_tasks)} tasks")
-        return len(new_tasks)
-    except Exception as e:
-        print(f"✗ Error processing {full_path}: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return 0
+    elif task_type in REVERSE_TASKS:
+        return test_single_generation(
+            generation_folder, 
+            output_dir, 
+            forward_tasks=[],
+            reverse_tasks=[task_type]
+        )
+    else:
+        print(f"Error: Invalid task type '{task_type}'")
+        print(f"Valid forward types: {FORWARD_TASKS}")
+        print(f"Valid reverse types: {REVERSE_TASKS}")
+        return []
 
 
 if __name__ == "__main__":
     # 可以调整线程数,建议根据 API 限流情况设置
-    main(max_workers=5)
+    # main(max_workers=5)
 
     # # 或者测试单个文件夹
     # tasks = test_single_generation(
     #     "/Users/pedestrian/Desktop/web_case/data_demo_renderbench/generation/1009769_www.kccworld.co.kr_english_",
-    #     "/Users/pedestrian/Desktop/web_case/data_demo_renderbench/edit_test_xml_new"
+    #     "/Users/pedestrian/Desktop/web_case/data_demo_renderbench/edit_test_sr",
+    #     forward_tasks=["Style Modification"],
+    #     reverse_tasks=["Remove Element"]
     # )
+    
+    # 或者测试单个任务类型
+    tasks = test_single_task_type(
+        "/Users/pedestrian/Desktop/web_case/data_demo_renderbench/generation/1009769_www.kccworld.co.kr_english_",
+        "Style Modification",
+        "/Users/pedestrian/Desktop/web_case/data_demo_renderbench/edit_test_sr"
+    )

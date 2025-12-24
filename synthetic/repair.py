@@ -78,7 +78,7 @@ class RepairTaskSynthesizer(BaseSynthesizer):
         dst_code_context = self.format_code_context(generation_data["dst_code"])
         defect_description = DEFECT_DESCRIPTIONS.get(defect_type, "")
 
-        prompt =f"""You are an expert web developer. I have a clean, high-quality codebase for a webpage.
+        prompt = f"""You are an expert web developer. I have a clean, high-quality codebase for a webpage.
 I want to generate a dataset for web repair/debugging tasks.
 
 Current Defect Type: {defect_type}
@@ -92,18 +92,24 @@ The defect should be visually noticeable or functionally impactful.
 
 Return XML format with the following structure:
 <description>A clear, one-sentence instruction for the repair task (e.g., 'Fix the z-index issue causing the modal to be hidden behind content' or 'Restore proper contrast between text and background').</description>
-<file path="path/to/file">
-The full content of the file with the injected defect
-</file>
-<file path="path/to/another/file">
-The full content of another modified file (if needed)
-</file>
+<search_replace path="path/to/file">
+<search>
+exact text to find in the original file
+</search>
+<replace>
+replacement text with the defect injected
+</replace>
+</search_replace>
+
+You can include multiple <search_replace> blocks if you need to modify multiple locations.
 
 Important:
-- Only include files that were actually modified to inject the defect.
+- The <search> block must contain the EXACT text from the original file (including whitespace and indentation).
+- The <replace> block contains the modified code with the defect injected.
 - The description should be a repair instruction (what needs to be fixed), not what was broken.
 - Make sure the defect is obvious enough to be noticed visually or functionally.
 - The defect should be fixable by modifying HTML/CSS/JS code.
+- Keep the search blocks as small as possible while still being unique in the file.
 
 Here is the clean code (which will be the Goal/Dst state after repair):
 {dst_code_context}"""
@@ -112,7 +118,7 @@ Here is the clean code (which will be the Goal/Dst state after repair):
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a helpful assistant that generates web development debugging datasets in XML format.",
+                        "content": "You are a helpful assistant that generates web development debugging datasets in XML format using search/replace blocks.",
                     },
                     {"role": "user", "content": prompt},
                 ],
@@ -122,7 +128,8 @@ Here is the clean code (which will be the Goal/Dst state after repair):
             # dst_code 是正确的代码（目标状态）
             dst_code = generation_data["dst_code"]
             # src_code 是注入缺陷后的代码（需要修复的起始状态）
-            src_code = self.merge_code_with_modifications(
+            # 使用 search/replace 应用修改
+            src_code = self.apply_search_replace(
                 dst_code,
                 result.get("modified_files", [])
             )
@@ -136,7 +143,7 @@ Here is the clean code (which will be the Goal/Dst state after repair):
                 "dst_code": dst_code,  # 正确的代码
                 "src_screenshot": [],  # 需要后续生成
                 "dst_screenshot": generation_data.get("dst_screenshot", []),
-                "modified_files": result.get("modified_files", []),
+                "modified_files": result.get("modified_files", []),  # 记录 search/replace 而非完整文件
                 "llm_raw_response": result.get("raw_response"),
                 "llm_metadata": result.get("llm_metadata"),
             }
@@ -289,19 +296,19 @@ def save_repair_task(
 
     # Save src code files (有缺陷的代码)
     for file_info in task["src_code"]:
-        file_path = os.path.join(src_dir, file_info["directory"])
+        file_path = os.path.join(src_dir, file_info["path"])
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(file_info["code"])
 
     # Save dst code files (正确的代码)
     for file_info in task["dst_code"]:
-        file_path = os.path.join(dst_dir, file_info["directory"])
+        file_path = os.path.join(dst_dir, file_info["path"])
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(file_info["code"])
 
-    # Prepare info.json
+    # Prepare info.json - 现在记录 modified_files 而非 modified_files
     info = {
         "task": task["task"],
         "task_type": task["task_type"],
@@ -311,7 +318,7 @@ def save_repair_task(
         "dst_code": task["dst_code"],
         "src_screenshot": task.get("src_screenshot", []),
         "dst_screenshot": task.get("dst_screenshot", []),
-        "modified_files": task.get("modified_files", []),
+        "modified_files": task.get("modified_files", []), 
     }
     llm_log = {
         "llm_raw_response": task.get("llm_raw_response", ""),
@@ -498,7 +505,7 @@ def test_single_generation(
             print(f"Description: {task['description']}")
             print(f"Defect Explanation: {task.get('defect_explanation', 'N/A')}")
             print(
-                f"Modified files: {[f['directory'] for f in task.get('modified_files', [])]}"
+                f"Modified files: {[f['path'] for f in task.get('modified_files', [])]}"
             )
 
         return new_tasks
@@ -544,7 +551,7 @@ if __name__ == "__main__":
     # main(max_workers=5)
     
     # # 或者只运行部分缺陷类型
-    main(max_workers=5, num_defect_types=4)
+    # main(max_workers=5, num_defect_types=4)
 
     # # 或者测试单个文件夹
     # tasks = test_single_generation(
@@ -554,8 +561,8 @@ if __name__ == "__main__":
     # )
     
     # 或者测试单个缺陷类型
-    # task = test_single_defect_type(
-    #     "/Users/pedestrian/Desktop/web_case/data_demo_renderbench/generation/1009769_www.kccworld.co.kr_english_",
-    #     "Occlusion",
-    #     "/Users/pedestrian/Desktop/web_case/data_demo_renderbench/repair_test"
-    # )
+    task = test_single_defect_type(
+        "/Users/pedestrian/Desktop/web_case/data_demo_renderbench/generation/1009769_www.kccworld.co.kr_english_",
+        "Occlusion",
+        "/Users/pedestrian/Desktop/web_case/data_demo_renderbench/repair_test_sr"
+    )
