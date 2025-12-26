@@ -2,9 +2,10 @@ from openai import OpenAI
 import os
 import json
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, Tuple
 from abc import ABC, abstractmethod
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class BaseSynthesizer(ABC):
@@ -81,14 +82,14 @@ class BaseSynthesizer(ABC):
         for path, search, replace in sr_matches:
             search_stripped = search.strip()
             replace_stripped = replace.strip()
-            
+
             # 检查 search 和 replace 是否相同
             if search_stripped == replace_stripped:
                 print(
                     f"Invalid modification: search and replace are identical for path {path.strip()}"
                 )
                 continue
-            
+
             modified_files.append(
                 {
                     "path": path.strip(),
@@ -300,6 +301,8 @@ class BaseSynthesizer(ABC):
         output_dir: str = None,
         folder_name: str = None,
         source_generation_dir: str = None,
+        task_types: List[str] = None,
+        difficulty_levels: List[int] = None,
     ) -> List[Dict]:
         """
         处理单个生成条目的抽象方法
@@ -309,8 +312,188 @@ class BaseSynthesizer(ABC):
             output_dir: 输出目录
             folder_name: 文件夹名称
             source_generation_dir: 源生成目录
+            task_types: 要生成的任务类型列表
+            difficulty_levels: 难度等级列表（即每个任务包含的任务类型数量）
 
         Returns:
             生成的任务列表
         """
         pass
+
+    def _process_single_info_json(
+        self,
+        args: Tuple,
+    ) -> int:
+        """
+        处理单个 info.json 文件的辅助函数
+
+        Args:
+            args: 包含参数的元组 (full_path, original_folder_name, root, output_dir, task_types, difficulty_levels)
+
+        Returns:
+            处理的任务数量
+        """
+        (
+            full_path,
+            original_folder_name,
+            root,
+            output_dir,
+            task_types,
+            difficulty_levels,
+        ) = args
+
+        print(f"Processing {full_path}...")
+        if task_types:
+            print(f"  Task types: {task_types}")
+        try:
+            with open(full_path, "r", encoding="utf-8") as f:
+                gen_data = json.load(f)
+
+            new_tasks = self.process_single_generation_entry(
+                gen_data,
+                output_dir=output_dir,
+                folder_name=original_folder_name,
+                source_generation_dir=root,
+                task_types=task_types,
+                difficulty_levels=difficulty_levels,
+            )
+            print(f"✓ Completed {full_path}: {len(new_tasks)} tasks")
+            return len(new_tasks)
+        except Exception as e:
+            print(f"✗ Error processing {full_path}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return 0
+
+    def run_batch_processing(
+        self,
+        input_dir: str,
+        output_dir: str,
+        max_workers: int = 4,
+        task_types: List[str] = None,
+        difficulty_levels: List[int] = None,
+    ) -> int:
+        """
+        批量处理 generation 文件夹的多线程函数
+
+        Args:
+            input_dir: 输入目录，包含 generation 文件夹
+            output_dir: 输出目录
+            max_workers: 最大线程数，默认为4
+            task_types: 可选的任务类型列表，用于过滤任务
+            difficulty_levels: 难度等级列表（即每个任务包含的任务类型数量），例如 [1, 2, 3]
+        Returns:
+            生成的任务总数
+        """
+        import random
+
+        tasks_to_process = []
+        for root, dirs, files in os.walk(input_dir):
+            for file in files:
+                if file == "info.json":
+                    full_path = os.path.join(root, file)
+                    original_folder_name = os.path.basename(root)
+
+                    # 这里不再做随机抽取，而是将配置传递给处理函数
+                    # 具体的随机组合逻辑在 process_single_generation_entry 中实现
+
+                    tasks_to_process.append(
+                        (
+                            full_path,
+                            original_folder_name,
+                            root,
+                            output_dir,
+                            task_types,
+                            difficulty_levels,
+                        )
+                    )
+
+        print(f"Found {len(tasks_to_process)} generation folders to process")
+        print(f"Using {max_workers} worker threads")
+
+        task_counter = 0
+
+        # 使用线程池处理
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有任务
+            future_to_path = {
+                executor.submit(
+                    self._process_single_info_json, task_args
+                ): task_args[0]
+                for task_args in tasks_to_process
+            }
+
+            # 处理完成的任务
+            for future in as_completed(future_to_path):
+                path = future_to_path[future]
+                try:
+                    task_count = future.result()
+                    task_counter += task_count
+                except Exception as e:
+                    print(f"Exception for {path}: {e}")
+
+        print(f"\n{'='*60}")
+        print(f"✓ All tasks completed!")
+        print(f"Generated {task_counter} tasks in {output_dir}")
+        print(f"{'='*60}")
+
+        return task_counter
+
+    def test_single_generation(
+        self,
+        generation_folder: str,
+        output_dir: str = None,
+        task_types: List[str] = None,
+    ) -> List[Dict]:
+        """
+        测试函数：处理指定的单个 generation 文件夹
+
+        Args:
+            generation_folder: generation 文件夹的路径
+            output_dir: 输出目录，如果为 None 则不保存文件，只返回结果
+            task_types: 要生成的任务类型列表
+
+        Returns:
+            生成的 task 列表
+        """
+        info_path = os.path.join(generation_folder, "info.json")
+
+        if not os.path.exists(info_path):
+            print(f"Error: info.json not found in {generation_folder}")
+            return []
+
+        original_folder_name = os.path.basename(generation_folder)
+        print(f"Processing {info_path}...")
+
+        try:
+            with open(info_path, "r", encoding="utf-8") as f:
+                gen_data = json.load(f)
+
+            new_tasks = self.process_single_generation_entry(
+                gen_data,
+                output_dir=output_dir,
+                folder_name=original_folder_name,
+                source_generation_dir=generation_folder,
+                task_types=task_types,
+            )
+
+            print(f"Generated {len(new_tasks)} tasks")
+
+            # 打印任务摘要
+            for i, task in enumerate(new_tasks):
+                print(f"\n--- Task {i+1} ---")
+                print(f"Type: {task['task_type']}")
+                print(f"Description: {task['description']}")
+                print(
+                    f"Modified files: {[f['path'] for f in task.get('label_modified_files', [])]}"
+                )
+
+            return new_tasks
+
+        except Exception as e:
+            print(f"Error processing {info_path}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return []
