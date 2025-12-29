@@ -1,5 +1,5 @@
 # 文件扩展名定义
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".svg"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".svg", ".webp"}
 CODE_EXTENSIONS = {
     ".html",
     ".css",

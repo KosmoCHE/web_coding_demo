@@ -6,7 +6,7 @@ from omegaconf import OmegaConf
 import shutil
 import time
 import random
-from synthesizer import BaseSynthesizer
+from synthetic.synthesizer import BaseSynthesizer
 from utils.config import *
 from utils.utils import save_task
 
@@ -23,7 +23,7 @@ DEFECT_TYPES = [
     # "Loss of Interactivity",  # 交互性丧失
     "Semantic Error",      # 语义错误
     "Nesting Error",       # 嵌套错误
-    # "Missing Attributes",  # 属性缺失
+    "Missing Attributes",  # 属性缺失
 ]
 
 # 每种破坏类型的详细说明
@@ -73,7 +73,8 @@ class RepairTaskSynthesizer(BaseSynthesizer):
         现有代码(Generation) -> 目标代码（正确的结果）
         LLM注入缺陷 -> 源代码（需要修复的代码）
         """
-        dst_code_context = self.format_code_context(generation_data["dst_code"])
+        dst_code = generation_data["dst_code"]
+        dst_code_context = self.format_code_context(dst_code)
         
         # 构建多缺陷描述
         defect_descriptions_str = ""
@@ -122,7 +123,7 @@ Important:
 Here is the clean code (which will be the Goal/Dst state after repair):
 {dst_code_context}"""
         try:
-            response = self._create_chat_completion_with_retry(
+            result = self._generate_and_apply_with_retry(
                 messages=[
                     {
                         "role": "system",
@@ -130,16 +131,12 @@ Here is the clean code (which will be the Goal/Dst state after repair):
                     },
                     {"role": "user", "content": prompt},
                 ],
+                code_list=dst_code,
             )
 
-            result = response
-            # dst_code 是正确的代码（目标状态）
-            dst_code = generation_data["dst_code"]
             # src_code 是注入缺陷后的代码（需要修复的起始状态）
-            src_code = self.apply_search_replace(
-                dst_code, 
-                result.get("modified_files", [])
-            )
+            src_code = result["modified_code"]
+            
             label_modified_files = []
             for mod in result.get("modified_files", []):
                 label_modified_files.append({
@@ -149,7 +146,7 @@ Here is the clean code (which will be the Goal/Dst state after repair):
                 })
             return {
                 "task": "repair",
-                "task_type": defect_types, # 列表
+                "task_type": defect_types,
                 "description": result["description"],
                 "src_code": src_code,  # 有缺陷的代码
                 "dst_code": dst_code,  # 正确的代码
@@ -225,7 +222,7 @@ def main(max_workers=4, difficulty_levels=None):
     config = OmegaConf.load("config/api.yaml")
     api_key = config.api.api_key
     base_url = config.api.base_url
-    model = "claude-3-5-sonnet-coder"
+    model = "gpt-5-codex"
 
     synthesizer = RepairTaskSynthesizer(api_key, base_url, model, max_tokens=32*1024)
 
@@ -294,12 +291,12 @@ def test_single_generation(
 
 
 if __name__ == "__main__":
-    # main(max_workers=5, difficulty_levels=[1, 2, 3, 4])
+    main(max_workers=5, difficulty_levels=[1, 2, 3])
     
-    # 或者测试单个缺陷类型
-    task = test_single_generation(
-        "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench/generation/1009769_www.kccworld.co.kr_english_",
-        "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench/repair_test_multi",
-        task_types=["Occlusion", "Color Contrast", "Text Overlap"],
-        difficulty_levels=[2, 3],
-    )
+    # # 或者测试单个缺陷类型
+    # task = test_single_generation(
+    #     "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench/generation/1009769_www.kccworld.co.kr_english_",
+    #     "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench/repair_test_multi",
+    #     task_types=["Occlusion", "Color Contrast", "Text Overlap"],
+    #     difficulty_levels=[2, 3],
+    # )

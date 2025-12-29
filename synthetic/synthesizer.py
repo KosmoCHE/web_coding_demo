@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional, Callable, Tuple
 from abc import ABC, abstractmethod
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+from utils.utils import apply_search_replace
 
 class BaseSynthesizer(ABC):
     """
@@ -105,114 +105,44 @@ class BaseSynthesizer(ABC):
 
         return result
 
-    def apply_search_replace(
-        self, code_list: List[Dict], modified_files: List[Dict]
-    ) -> List[Dict]:
-        """
-        将 search/replace 块应用到源代码
-
-        Args:
-            code_list: 原始代码文件列表
-            modified_files: search/replace 块列表
-
-        Returns:
-            修改后的代码文件列表
-        """
-        # 创建代码的副本
-        result_code = []
-        code_map = {item["path"]: item["code"] for item in code_list}
-
-        # 按路径分组 modified_files
-        blocks_by_path = {}
-        for block in modified_files:
-            path = block["path"]
-            if path not in blocks_by_path:
-                blocks_by_path[path] = []
-            blocks_by_path[path].append(block)
-
-        # 应用每个文件的修改
-        for path, blocks in blocks_by_path.items():
-            if path in code_map:
-                code = code_map[path]
-                for block in blocks:
-                    search_text = block["search"]
-                    replace_text = block["replace"]
-
-                    if search_text in code:
-                        code = code.replace(search_text, replace_text, 1)
-                    else:
-                        # 尝试忽略空白差异的匹配
-                        normalized_search = self._normalize_whitespace(
-                            search_text
-                        )
-                        lines = code.split("\n")
-                        found = False
-
-                        for i in range(len(lines)):
-                            # 尝试匹配连续的行
-                            for j in range(i + 1, len(lines) + 1):
-                                candidate = "\n".join(lines[i:j])
-                                if (
-                                    self._normalize_whitespace(candidate)
-                                    == normalized_search
-                                ):
-                                    code = code.replace(
-                                        candidate, replace_text, 1
-                                    )
-                                    found = True
-                                    break
-                            if found:
-                                break
-
-                        if not found:
-                            print(
-                                f"Warning: Could not find search text in {path}"
-                            )
-                            print(f"Search text: {search_text[:100]}...")
-
-                code_map[path] = code
-
-        # 构建结果列表
-        for item in code_list:
-            new_item = item.copy()
-            if item["path"] in code_map:
-                new_item["code"] = code_map[item["path"]]
-            result_code.append(new_item)
-
-        return result_code
-
-    def _normalize_whitespace(self, text: str) -> str:
-        """
-        标准化空白字符以进行模糊匹配
-        """
-        # 移除行尾空白，标准化换行
-        lines = [line.rstrip() for line in text.split("\n")]
-        return "\n".join(lines).strip()
-
-    def _create_chat_completion_with_retry(
+    def _generate_and_apply_with_retry(
         self,
         messages: List[Dict[str, Any]],
+        code_list: List[Dict],
         max_retries: int = 3,
         backoff_base: int = 2,
     ) -> Dict:
         """
-        带重试机制的聊天完成调用，包含立即解析
-        记录所有原始响应，包括失败的尝试，用于调试
+        带重试机制的LLM生成和search/replace应用流程
+        将LLM调用和代码应用视为一个原子操作，任何失败都会触发重试
 
         Args:
-            messages: 消息列表
+            messages: LLM消息列表
+            code_list: 要应用修改的代码文件列表
             max_retries: 最大重试次数
             backoff_base: 退避基数
 
         Returns:
-            解析后的响应字典，包含raw_response和llm_metadata
+            包含解析结果、应用后代码和元数据的字典
+            
+        Raises:
+            Exception: 所有重试都失败后抛出最后一个异常
         """
         last_error = None
-        last_raw_response = None
-        all_attempts = []  # 记录所有尝试用于调试
+        all_attempts = []
 
         for attempt in range(1, max_retries + 1):
+            attempt_record = {
+                "attempt": attempt,
+                "raw_response": None,
+                "success": False,
+                "error": None,
+                "stage": None,  # 'llm_call', 'parse', 'apply'
+            }
+            
             try:
+                # Stage 1: LLM调用
+                attempt_record["stage"] = "llm_call"
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
@@ -226,72 +156,72 @@ class BaseSynthesizer(ABC):
                 )
                 if not response_text:
                     raise ValueError("Empty response content from LLM.")
-                last_raw_response = response_text
+                
+                attempt_record["raw_response"] = response_text
 
-                # 记录这次尝试
-                attempt_record = {
-                    "attempt": attempt,
-                    "raw_response": response_text,
-                    "success": False,
-                    "error": None,
-                }
-
+                # Stage 2: 解析响应
+                attempt_record["stage"] = "parse"
                 parsed = self.parse_llm_response(response_text)
                 if not parsed:
-                    attempt_record["error"] = "Failed to parse LLM response"
-                    all_attempts.append(attempt_record)
                     raise ValueError("Failed to parse LLM response.")
                 if not parsed.get("modified_files"):
-                    attempt_record["error"] = (
-                        "Parsed LLM response has no modified_files"
-                    )
-                    all_attempts.append(attempt_record)
-                    raise ValueError(
-                        "Parsed LLM response has no modified_files."
-                    )
+                    raise ValueError("Parsed LLM response has no modified_files.")
+
+                # Stage 3: 应用search/replace
+                attempt_record["stage"] = "apply"
+                modified_code = apply_search_replace(
+                    code_list, 
+                    parsed.get("modified_files", [])
+                )
 
                 # 成功！
                 attempt_record["success"] = True
                 all_attempts.append(attempt_record)
 
-                parsed["raw_response"] = response_text
-                parsed["llm_metadata"] = {
-                    "model": self.model,
-                    "total_attempts": attempt,
-                    "all_attempts": all_attempts,  # 包含所有尝试用于调试
+                result = {
+                    "description": parsed["description"],
+                    "modified_files": parsed["modified_files"],
+                    "modified_code": modified_code,
+                    "raw_response": response_text,
+                    "llm_metadata": {
+                        "model": self.model,
+                        "total_attempts": attempt,
+                        "all_attempts": all_attempts,
+                    }
                 }
-                return parsed
+                return result
+                
             except Exception as exc:
                 last_error = exc
+                attempt_record["error"] = str(exc)
+                all_attempts.append(attempt_record)
 
-                # 如果还没记录这次尝试（如API错误），现在记录
-                if not all_attempts or all_attempts[-1]["attempt"] != attempt:
-                    all_attempts.append(
-                        {
-                            "attempt": attempt,
-                            "raw_response": last_raw_response,
-                            "success": False,
-                            "error": str(exc),
-                        }
-                    )
-
-                wait_time = backoff_base**attempt
+                wait_time = backoff_base ** attempt
+                error_stage = attempt_record["stage"] or "unknown"
                 snippet = (
-                    (last_raw_response[:200] + "...")
-                    if last_raw_response and len(last_raw_response) > 200
-                    else last_raw_response
+                    (attempt_record["raw_response"][:200] + "...")
+                    if attempt_record["raw_response"] and len(attempt_record["raw_response"]) > 200
+                    else attempt_record["raw_response"]
                 )
+                
                 if attempt == max_retries:
                     print(
-                        f"Chat completion failed after {attempt} attempts. "
+                        f"Generation and application failed after {attempt} attempts. "
+                        f"Last error at stage '{error_stage}': {exc}\n"
                         f"Last raw response snippet: {snippet}"
                     )
-                    raise
+                    raise Exception(
+                        f"Failed after {max_retries} attempts. "
+                        f"Last error: {exc}"
+                    ) from last_error
+                    
                 print(
-                    f"Chat completion failed (attempt {attempt}/{max_retries}): {exc}. "
-                    f"Retrying in {wait_time}s... Last raw response snippet: {snippet}"
+                    f"Attempt {attempt}/{max_retries} failed at stage '{error_stage}': {exc}. "
+                    f"Retrying in {wait_time}s...\n"
+                    f"Raw response snippet: {snippet}"
                 )
                 time.sleep(wait_time)
+        
         raise last_error
 
     @abstractmethod

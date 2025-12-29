@@ -5,7 +5,7 @@ import json
 import shutil
 from omegaconf import OmegaConf
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from utils import encode_image, chat_with_retry
+from utils import encode_image, chat_with_retry, get_image_mime_type
 import traceback
 from utils.config import *
 # 统一使用的模型
@@ -23,15 +23,7 @@ def get_image_description(client: OpenAI, file_path: str, filename: str):
     base64_image = encode_image(file_path)
     
     # 根据文件扩展名确定MIME类型
-    file_ext = os.path.splitext(file_path)[1].lower()
-    if file_ext == ".svg":
-        mime_type = "image/png"  # SVG已转换为PNG
-    elif file_ext in [".jpg", ".jpeg"]:
-        mime_type = "image/jpeg"
-    elif file_ext == ".png":
-        mime_type = "image/png"
-    else:
-        mime_type = "image/png"  # 默认使用PNG
+    mime_type = get_image_mime_type(file_path)
     
     image_description_message = [
         {
@@ -163,7 +155,7 @@ def transform_generation(
         html_content = f.read()
         info["dst_code"].append(
             {
-                "directory": "index.html",
+                "path": "index.html",
                 "code": html_content,
             }
         )
@@ -209,15 +201,7 @@ def transform_generation(
         base64_image = encode_image(image_path)
         
         # 根据文件扩展名确定MIME类型
-        file_ext = os.path.splitext(image_path)[1].lower()
-        if file_ext in [".jpg", ".jpeg"]:
-            mime_type = "image/jpeg"
-        elif file_ext == ".png":
-            mime_type = "image/png"
-        elif file_ext == ".svg":
-            mime_type = "image/png"  # SVG已转换为PNG
-        else:
-            mime_type = "image/png"  # 默认使用PNG
+        mime_type = get_image_mime_type(image_path)
         
         message[0]["content"].append(
             {

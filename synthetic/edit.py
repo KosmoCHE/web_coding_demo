@@ -6,7 +6,7 @@ from omegaconf import OmegaConf
 import shutil
 import time
 import random
-from synthesizer import BaseSynthesizer
+from synthetic.synthesizer import BaseSynthesizer
 from utils.config import *
 from utils.utils import save_task
 
@@ -49,7 +49,8 @@ class EditTaskSynthesizer(BaseSynthesizer):
         现有代码(Generation) -> 源代码
         LLM修改它 -> 目标代码
         """
-        src_code_context = self.format_code_context(generation_data["dst_code"])
+        src_code = generation_data["dst_code"]
+        src_code_context = self.format_code_context(src_code)
         
         # 构建多任务描述
         task_descriptions_str = ""
@@ -98,7 +99,7 @@ Here is the source code:
 {src_code_context}"""
 
         try:
-            response = self._create_chat_completion_with_retry(
+            result = self._generate_and_apply_with_retry(
                 messages=[
                     {
                         "role": "system",
@@ -106,19 +107,15 @@ Here is the source code:
                     },
                     {"role": "user", "content": prompt},
                 ],
+                code_list=src_code,
             )
 
-            result = response
-            src_code = generation_data["dst_code"]
-            # 使用 search/replace 应用修改
-            dst_code = self.apply_search_replace(
-                src_code, 
-                result.get("modified_files", [])
-            )
+            # dst_code 是应用修改后的代码
+            dst_code = result["modified_code"]
 
             return {
                 "task": "edit",
-                "task_type": task_types, # 现在是一个列表
+                "task_type": task_types,
                 "description": result["description"],
                 "src_code": src_code,
                 "dst_code": dst_code,
@@ -202,7 +199,7 @@ def main(max_workers=4, difficulty_levels=None):
     config = OmegaConf.load("config/api.yaml")
     api_key = config.api.api_key
     base_url = config.api.base_url
-    model = "claude-3-5-sonnet-coder"
+    model = "gpt-5-codex"
 
     synthesizer = EditTaskSynthesizer(api_key, base_url, model, max_tokens=32*1024)
 
@@ -252,7 +249,7 @@ def test_single_generation(
     config = OmegaConf.load("config/api.yaml")
     api_key = config.api.api_key
     base_url = config.api.base_url
-    model = "claude-3-5-sonnet-coder"
+    model = "gpt-5-codex"
     synthesizer = EditTaskSynthesizer(api_key, base_url, model, max_tokens=16*1024)
     
     # 模拟 process_single_generation_entry 的调用逻辑
@@ -270,13 +267,13 @@ def test_single_generation(
     )
 
 if __name__ == "__main__":
-    # main(max_workers=5, difficulty_levels=[1, 2, 3, 4])
+    main(max_workers=5, difficulty_levels=[1, 2, 3])
 
-    # 或者测试单个文件夹
-    tasks = test_single_generation(
-        "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench/generation/1009769_www.kccworld.co.kr_english_",
-        "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench/edit_test_multi",
-        task_types=["Style Modification", "Add Element", "Function Modification"],
-        difficulty_levels=[2], # 测试生成包含2个修改的任务
-    )
+    # # 或者测试单个文件夹
+    # tasks = test_single_generation(
+    #     "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench/generation/1009769_www.kccworld.co.kr_english_",
+    #     "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench/edit_test_multi",
+    #     task_types=["Style Modification", "Add Element", "Function Modification"],
+    #     difficulty_levels=[2], # 测试生成包含2个修改的任务
+    # )
 

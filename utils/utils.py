@@ -269,3 +269,116 @@ def save_task(
         json.dump(llm_systhetic_log, f, indent=2, ensure_ascii=False)
 
     print(f"Saved task to {task_dir}")
+
+def apply_search_replace(
+    code_list: List[Dict], modified_files: List[Dict]
+) -> List[Dict]:
+    """
+    将 search/replace 块应用到源代码
+
+    Args:
+        code_list: 原始代码文件列表
+        modified_files: search/replace 块列表
+
+    Returns:
+        修改后的代码文件列表
+    
+    Raises:
+        ValueError: 当无法找到要替换的文本时
+    """
+    # 创建代码的副本
+    result_code = []
+    code_map = {item["path"]: item["code"] for item in code_list}
+
+    # 按路径分组 modified_files
+    blocks_by_path = {}
+    for block in modified_files:
+        path = block["path"]
+        if path not in blocks_by_path:
+            blocks_by_path[path] = []
+        blocks_by_path[path].append(block)
+
+    # 应用每个文件的修改
+    for path, blocks in blocks_by_path.items():
+        if path not in code_map:
+            raise ValueError(f"File path not found in code_list: {path}")
+            
+        code = code_map[path]
+        for block_idx, block in enumerate(blocks):
+            search_text = block["search"]
+            replace_text = block["replace"]
+
+            if search_text in code:
+                code = code.replace(search_text, replace_text, 1)
+            else:
+                # 尝试忽略空白差异的匹配
+                normalized_search = normalize_whitespace(search_text)
+                lines = code.split("\n")
+                found = False
+
+                for i in range(len(lines)):
+                    # 尝试匹配连续的行
+                    for j in range(i + 1, len(lines) + 1):
+                        candidate = "\n".join(lines[i:j])
+                        if (
+                            normalize_whitespace(candidate)
+                            == normalized_search
+                        ):
+                            code = code.replace(candidate, replace_text, 1)
+                            found = True
+                            break
+                    if found:
+                        break
+
+                if not found:
+                    error_msg = (
+                        f"Failed to apply search/replace in {path} (block {block_idx + 1}).\n"
+                        f"Search text (first 200 chars): {search_text[:200]}...\n"
+                        f"This may indicate LLM generated invalid modifications."
+                    )
+                    raise ValueError(error_msg)
+
+        code_map[path] = code
+
+    # 构建结果列表
+    for item in code_list:
+        new_item = item.copy()
+        if item["path"] in code_map:
+            new_item["code"] = code_map[item["path"]]
+        result_code.append(new_item)
+
+    return result_code
+
+def normalize_whitespace(text: str) -> str:
+    """
+    标准化空白字符以进行模糊匹配
+    """
+    # 移除行尾空白,标准化换行
+    lines = [line.rstrip() for line in text.split("\n")]
+    return "\n".join(lines).strip()
+
+def get_image_mime_type(file_path: str) -> str:
+    """
+    根据文件扩展名返回对应的MIME类型
+    
+    Args:
+        file_path: 图片文件路径
+        
+    Returns:
+        str: MIME类型字符串,如 "image/png", "image/jpeg" 等
+        
+    Note:
+        - SVG文件返回 "image/png" (因为会被转换为PNG)
+        - 不支持的格式默认返回 "image/png"
+    """
+    file_ext = os.path.splitext(file_path)[1].lower()
+    
+    mime_type_map = {
+        ".svg": "image/png",  # SVG已转换为PNG
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }
+    
+    return mime_type_map.get(file_ext, "image/png")
