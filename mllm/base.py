@@ -18,7 +18,8 @@ class MLLMChat:
         self.max_tokens = kwargs.get("max_tokens", self.DEFAULT_MAX_TOKENS)
         self.temperature = kwargs.get("temperature", self.DEFAULT_TEMPERATURE)
         self.seed = kwargs.get("seed", self.DEFAULT_SEED)
-        print(f"Temperature: {self.temperature}, Max Tokens: {self.max_tokens}, Seed: {self.seed}")
+        self.max_retry = kwargs.get("max_retry", 3)
+        print(f"Model: {self.model_name},Temperature: {self.temperature}, Max Tokens: {self.max_tokens}, Seed: {self.seed}, Max Retry: {self.max_retry}")
         
 
     def chat(self, messages: List[Dict[str, Any]], max_retries: int = 3) -> str:
@@ -35,53 +36,7 @@ class MLLMChat:
         
         pass
     
-    def load_generation_data(self, data_folder: Path) -> Tuple[str, List[str], List[Dict[str, Any]]]:
-        """
-        加载 generation 任务的 info.json 数据
-        
-        Args:
-            data_folder: generation 任务的数据文件夹路径
-        
-        Returns:
-            Tuple[str, List[str], List[Dict]]: (description, screenshot_paths, resources_info)
-            - description: 任务描述
-            - screenshot_paths: 目标截图的完整路径列表
-            - resources_info: 资源文件信息列表,包含路径、类型和描述
-        """
-        info_path = data_folder / "info.json"
-        
-        with open(info_path, 'r', encoding='utf-8') as f:
-            info = json.load(f)
-        
-        # 1. 获取 description
-        description = info.get("description", "")
-        
-        # 2. 获取 dst_screenshot 路径
-        dst_screenshots = info.get("dst_screenshot", [])
-        screenshot_paths = [str(data_folder / "dst" / screenshot) for screenshot in dst_screenshots]
-        
-        # 3. 处理 resources 信息
-        resources = info.get("resources", [])
-        resources_info = []
-        
-        for resource in resources:
-            resource_type = resource.get("type", "")
-            resource_path = resource.get("path", "")
-            
-            resource_info = {
-                "type": resource_type,
-                "path": resource_path
-            }
-            
-            # 如果是图片,添加描述信息
-            if resource_type == "image":
-                resource_info["description"] = resource.get("description", "")
-            
-            resources_info.append(resource_info)
-        
-        return description, screenshot_paths, resources_info
-    
-    def load_edit_repair_data(self, data_folder: Path) -> Tuple[str, List[Dict[str, str]], List[str], List[str], List[Dict[str, Any]]]:
+    def load_data(self, data_folder: Path) -> Dict[str, Any]:
         """
         加载 edit/repair 任务的 info.json 数据
         
@@ -101,46 +56,17 @@ class MLLMChat:
         with open(info_path, 'r', encoding='utf-8') as f:
             info = json.load(f)
         
-        # 1. 获取 description
-        description = info.get("description", "")
-        
-        # 2. 获取 src 代码
-        src_code_list = info.get("src_code", [])
-        src_code = []
-        
-        for file_info in src_code_list:
-            file_path = file_info.get("path", "")
-            file_code = file_info.get("code", "")
-            src_code.append({"path": file_path, "code": file_code})
         
         # 3. 获取 src_screenshot 路径
         src_screenshots_data = info.get("src_screenshot", [])
-        src_screenshots = [str(data_folder / "src" / screenshot) for screenshot in src_screenshots_data]
+        info["src_screenshots"] = [str(data_folder / "src" / screenshot) for screenshot in src_screenshots_data]
         
         # 4. 获取 dst_screenshot 路径
         dst_screenshots_data = info.get("dst_screenshot", [])
-        dst_screenshots = [str(data_folder / "dst" / screenshot) for screenshot in dst_screenshots_data]
+        info["dst_screenshots"] = [str(data_folder / "dst" / screenshot) for screenshot in dst_screenshots_data]
+
         
-        # 5. 处理 resources 信息
-        resources = info.get("resources", [])
-        resources_info = []
-        
-        for resource in resources:
-            resource_type = resource.get("type", "")
-            resource_path = resource.get("path", "")
-            
-            resource_info = {
-                "type": resource_type,
-                "path": resource_path
-            }
-            
-            # 如果是图片,添加描述信息
-            if resource_type == "image":
-                resource_info["description"] = resource.get("description", "")
-            
-            resources_info.append(resource_info)
-        
-        return description, src_code, src_screenshots, dst_screenshots, resources_info
+        return info
     
     def create_workspace(self, data_folder: Path, workspace_path: Path, resources_info: List[Dict[str, Any]]) -> None:
         """
@@ -254,56 +180,16 @@ class MLLMChat:
                 resource_type = resource.get("type", "")
                 resource_path = resource.get("path", "")
                 
-                if mode == "text":
-                    # text模式: 添加路径和描述(如果是图片)
-                    resource_instruction += f"- `{resource_path}`"
-                    if resource_type == "image" and resource.get("description"):
-                        resource_instruction += f"\n  - Description: {resource['description']}"
-                    resource_instruction += "\n"
-                
-                elif mode == "image":
-                    # image模式: 添加路径
-                    resource_instruction += f"- `{resource_path}`\n"
+                # text模式: 添加路径和描述(如果是图片)
+                resource_instruction += f"- `{resource_path}`"
+                if resource_type == "image" and resource.get("description"):
+                    resource_instruction += f"\n  - Description: {resource['description']}"
+                resource_instruction += "\n"
             
             user_content.append({
                 "type": "text",
                 "text": resource_instruction
             })
-        
-        # 5. image模式下,添加资源图片本体(与path绑定)
-        if mode == "image" and workspace_path:
-            
-            for resource in resources_info:
-                resource_type = resource.get("type", "")
-                resource_path = resource.get("path", "")
-                
-                # 只处理图片类型
-                if resource_type == "image" and resource_path:
-                    full_path = workspace_path / resource_path
-                    
-                    if full_path.exists():
-                        try:
-                            img_base64 = encode_image(str(full_path))
-                            
-                            # 使用工具函数获取MIME类型
-                            mime_type = get_image_mime_type(str(full_path))
-                            
-                            # 添加图片说明文本(绑定path)
-                            user_content.append({
-                                "type": "text",
-                                "text": f"\n[Resource Image: {resource_path}]"
-                            })
-                            
-                            # 添加图片本体
-                            user_content.append({
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:{mime_type};base64,{img_base64}"
-                                }
-                            })
-                            
-                        except Exception as e:
-                            print(f"Warning: Failed to encode image {full_path}: {e}")
         
         # 构建 user message
         messages.append({
@@ -482,10 +368,15 @@ class MLLMChat:
         
         """
         data_folder = Path(data_folder)
-        workspace_path = data_folder / f"ans_{self.model_name}_{mode}"
+        web_name = data_folder.name
+        task_type = data_folder.parent.name
+        workspace_path = Path(f"results/{self.model_name}/{mode}/{task_type}/{web_name}/ans").resolve()
         
         # 1. 加载 generation 任务数据
-        description, screenshot_paths, resources_info = self.load_generation_data(data_folder)
+        info = self.load_data(data_folder)
+        description = info.get("description", "")
+        screenshot_paths = info.get("dst_screenshots", [])
+        resources_info = info.get("resources", [])
         print(f"Target screenshots: {len(screenshot_paths)} items")
         print(f"Resources: {len(resources_info)} items")
         
@@ -517,13 +408,17 @@ class MLLMChat:
         print(f"Screenshots: {screenshot_files}")
         
         llm_log = {
+            "task_type": info["task_type"],
+            "description": description,
             "ans_screenshot": screenshot_files,
             "workspace_path": str(workspace_path),
             "llm_input_messages": messages,
-            "llm_response": response
+            "llm_response": response,
+            "label_code": info["dst_code"],
+            "generated_code": saved_files
         }
         
-        with open(data_folder / f"{self.model_name}_{mode}_log.json", 'w', encoding='utf-8') as f:
+        with open(workspace_path.parent / f"{self.model_name}_{mode}_log.json", 'w', encoding='utf-8') as f:
             json.dump(llm_log, f, ensure_ascii=False, indent=4)
     
     def parse_and_apply_search_replace(self, response: str, src_code: List[Dict[str, str]], workspace_path: Path) -> List[Dict[str, str]]:
@@ -539,6 +434,7 @@ class MLLMChat:
             List[Dict[str, str]]: 修改后的代码文件列表,格式为 [{"path": "...", "code": "..."}]
         """
         # 解析 search_replace 块
+        generate_successfully = True
         pattern = r'<search_replace\s+path=["\']([^"\']+)["\']>\s*<search>(.*?)</search>\s*<replace>(.*?)</replace>\s*</search_replace>'
         matches = re.findall(pattern, response, re.DOTALL)
         
@@ -566,11 +462,18 @@ class MLLMChat:
                 file_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(file_info["code"])
-            return src_code
+            return src_code, False
         
         # 使用工具函数应用 search_replace
-        modified_code = apply_search_replace(src_code, modified_files_list)
-        
+        try:
+            modified_code = apply_search_replace(src_code, modified_files_list)
+        except Exception as e:
+            print(f"Error applying search_replace: {e}")
+            import traceback
+            traceback.print_exc()
+            modified_code = src_code  # 回退到原始代码
+            generate_successfully = False
+            
         # 保存修改后的代码到 workspace
         for file_info in modified_code:
             file_path = workspace_path / file_info["path"]
@@ -581,7 +484,7 @@ class MLLMChat:
             
             print(f"Saved: {file_info['path']}")
     
-        return modified_code
+        return modified_code, generate_successfully
 
     def run_edit_repair_task(self,
                         data_folder: Union[str, Path],
@@ -599,10 +502,17 @@ class MLLMChat:
             Dict[str, Any]: 包含任务执行结果的字典
         """
         data_folder = Path(data_folder)
-        workspace_path = data_folder / f"ans_{self.model_name}_{mode}"
-    
+        task_type = data_folder.parent.name
+        web_name = data_folder.name
+        workspace_path = Path(f"results/{self.model_name}/{mode}/{task_type}/{web_name}/ans").resolve()
+
         # 1. 加载 edit/repair 任务数据
-        description, src_code, src_screenshots, dst_screenshots, resources_info = self.load_edit_repair_data(data_folder)
+        info = self.load_data(data_folder)
+        description = info.get("description", "")
+        src_code = info.get("src_code", [])
+        src_screenshots = info.get("src_screenshots", [])
+        dst_screenshots = info.get("dst_screenshots", [])
+        resources_info = info.get("resources", [])
         print(f"Source code files: {len(src_code)} items")
         print(f"Source screenshots: {len(src_screenshots)} items")
         print(f"Target screenshots: {len(dst_screenshots)} items")
@@ -627,7 +537,7 @@ class MLLMChat:
         print("LLM response received")
     
         # 5. 解析并应用 search_replace 到 workspace
-        modified_files = self.parse_and_apply_search_replace(response, src_code, workspace_path)
+        modified_files, generate_successfully = self.parse_and_apply_search_replace(response, src_code, workspace_path)
         print(f"Modified {len(modified_files)} files")
     
         # 6. 截图
@@ -635,14 +545,18 @@ class MLLMChat:
         print(f"Screenshots: {screenshot_files}")
     
         llm_log = {
+            "task_type": info["task_type"],
+            "description": description,
             "ans_screenshot": screenshot_files,
             "workspace_path": str(workspace_path),
             "llm_input_messages": messages,
             "llm_response": response,
-            "modified_files": modified_files
+            "label_modified_files": info["label_modified_files"],
+            "modified_files": modified_files,
+            "generate_successfully": generate_successfully
         }
     
-        with open(data_folder / f"{self.model_name}_{mode}_log.json", 'w', encoding='utf-8') as f:
+        with open(workspace_path.parent / f"{self.model_name}_{mode}_log.json", 'w', encoding='utf-8') as f:
             json.dump(llm_log, f, ensure_ascii=False, indent=4)
 
 

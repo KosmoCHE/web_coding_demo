@@ -19,12 +19,11 @@ class OpenAIChat(MLLMChat):
         
         super().__init__(model_name, **kwargs)
     
-    def chat(self, messages: List[dict], max_retries: int = 3) -> str:
+    def chat(self, messages: List[dict]) -> str:
         """
         发送消息到OpenAI并获取响应
         Args:
             messages: OpenAI格式的消息列表
-            max_retries: 最大重试次数
         Returns:
             LLM的响应内容字符串
         """
@@ -34,7 +33,7 @@ class OpenAIChat(MLLMChat):
             model=self.model_name,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
-            max_retries=max_retries
+            max_retries=self.max_retry
         )
         
         return response
@@ -46,25 +45,35 @@ if __name__ == "__main__":
     api_key = config.api.api_key
     base_url = config.api.base_url
     model = "gpt-5-codex"
+    # model = "gemini-3-pro-preview"
     client = OpenAIChat(
         model_name=model,
         api_key=api_key,
         base_url=base_url,
         max_tokens=32 * 1024,
+        max_retry=6,
     )
     # 测试单个generation文件夹
     # data_folder = "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench/generation/2931255_www.testing.com"
     # client.run_generation_task(
     #     data_folder=data_folder,
-    #     mode="image",
+    #     mode="text",
     #     instruction_prompt=Generation_Instruction_Prompt,
     # )
     
     
-    # 测试edit 任务
-    data_folder = "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench_v1/edit_test_multi/1009769_www.kccworld.co.kr_english__L2_0"
+    # # 测试edit 任务
+    # data_folder = "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench/edit/948729_www.crystalriverspas.com_L3_2"
+    # client.run_edit_repair_task(
+    #     data_folder=data_folder,
+    #     mode="image",
+    #     instruction_prompt=Edit_Instruction_Prompt,
+    # )
+    
+    # # 测试repair 任务
+    data_folder = "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench/repair/2775490_www.dmkjgroup.com_L3_2"
     client.run_edit_repair_task(
         data_folder=data_folder,
-        mode="text",
-        instruction_prompt=Edit_Instruction_Prompt,
+        mode="image",
+        instruction_prompt=Repair_Instruction_Prompt,
     )

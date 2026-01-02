@@ -108,6 +108,7 @@ Here is the source code:
                     {"role": "user", "content": prompt},
                 ],
                 code_list=src_code,
+                max_retries=self.max_retries,
             )
 
             # dst_code 是应用修改后的代码
@@ -183,7 +184,7 @@ Here is the source code:
         return generated_tasks
 
 
-def main(max_workers=4, difficulty_levels=None):
+def main(max_workers=4, difficulty_levels=None, max_retries=3):
     """
     主函数 - 多线程版本
 
@@ -201,7 +202,7 @@ def main(max_workers=4, difficulty_levels=None):
     base_url = config.api.base_url
     model = "gpt-5-codex"
 
-    synthesizer = EditTaskSynthesizer(api_key, base_url, model, max_tokens=32*1024)
+    synthesizer = EditTaskSynthesizer(api_key, base_url, model, max_tokens=32*1024, max_retries=max_retries)
 
     if difficulty_levels is None:
         difficulty_levels = [1, 2, 3] # 默认生成 1, 2, 3 种修改组合的任务
@@ -267,13 +268,13 @@ def test_single_generation(
     )
 
 if __name__ == "__main__":
-    main(max_workers=5, difficulty_levels=[1, 2, 3])
+    # main(max_workers=5, difficulty_levels=[1, 3], max_retries=6)
 
-    # # 或者测试单个文件夹
-    # tasks = test_single_generation(
-    #     "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench/generation/1009769_www.kccworld.co.kr_english_",
-    #     "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench/edit_test_multi",
-    #     task_types=["Style Modification", "Add Element", "Function Modification"],
-    #     difficulty_levels=[2], # 测试生成包含2个修改的任务
-    # )
+    # 或者测试单个文件夹
+    tasks = test_single_generation(
+        "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench/generation/1009769_www.kccworld.co.kr_english_",
+        "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench/edit_test_multi",
+        task_types=["Style Modification", "Add Element", "Function Modification"],
+        difficulty_levels=[1], # 测试生成包含2个修改的任务
+    )
 

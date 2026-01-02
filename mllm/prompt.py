@@ -21,6 +21,7 @@ IMPORTANT:
 - You must follow the output format strictly. Outputting code with the <file path="..."> </file> tags is mandatory.
 - Do not output any code outside of the specified tags.
 - Do not output code in ``` ```.
+- Ensure all files are included in a single response.
 """
 
 Edit_Instruction_Prompt = """
@@ -47,6 +48,7 @@ Important:
 - The <replace> block contains the modified code.
 - One <search_replace> block can only contain one pair of <search> and <replace>.
 - You can include multiple <search_replace> blocks if you need to modify multiple locations, you can also modify multiple files.
+- You must complete the task in single response.
 """
 
 Repair_Instruction_Prompt = """
@@ -73,4 +75,5 @@ Important:
 - The <replace> block contains the modified code.
 - One <search_replace> block can only contain one pair of <search> and <replace>.
 - You can include multiple <search_replace> blocks if you need to modify multiple locations, you can also modify multiple files.
+- You must complete the task in single response.
 """

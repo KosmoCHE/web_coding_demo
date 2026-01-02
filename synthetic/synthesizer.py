@@ -19,10 +19,12 @@ class BaseSynthesizer(ABC):
         base_url: Optional[str] = None,
         model: str = "gpt-4o",
         max_tokens: int = 8192,
+        max_retries: int = 3,
     ):
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
         self.max_tokens = max_tokens
+        self.max_retries = max_retries
 
     def format_code_context(self, code_list: List[Dict]) -> str:
         """

@@ -132,6 +132,7 @@ Here is the clean code (which will be the Goal/Dst state after repair):
                     {"role": "user", "content": prompt},
                 ],
                 code_list=dst_code,
+                max_retries=self.max_retries,
             )
 
             # src_code 是注入缺陷后的代码（需要修复的起始状态）
@@ -150,6 +151,7 @@ Here is the clean code (which will be the Goal/Dst state after repair):
                 "description": result["description"],
                 "src_code": src_code,  # 有缺陷的代码
                 "dst_code": dst_code,  # 正确的代码
+                "resources": generation_data.get("resources", []),
                 "label_modified_files": label_modified_files,  # 训练时src2dst时应该使用的modified_files
                 "synthetic_modified_files": result.get("modified_files", []),  # 合成数据时进行修改的文件
                 "llm_raw_response": result.get("raw_response"),
@@ -210,7 +212,7 @@ Here is the clean code (which will be the Goal/Dst state after repair):
         return generated_tasks
 
 
-def main(max_workers=4, difficulty_levels=None):
+def main(max_workers=4, difficulty_levels=None, max_retries=3):
     """
     主函数 - 多线程版本
     """
@@ -218,13 +220,13 @@ def main(max_workers=4, difficulty_levels=None):
     input_dir = (
         "/Users/pedestrian/Desktop/web_case//data/data_demo_renderbench/generation"
     )
-    output_dir = "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench/repair"
+    output_dir = "/Users/pedestrian/Desktop/web_case/data/data_demo_renderbench_10/repair"
     config = OmegaConf.load("config/api.yaml")
     api_key = config.api.api_key
     base_url = config.api.base_url
     model = "gpt-5-codex"
 
-    synthesizer = RepairTaskSynthesizer(api_key, base_url, model, max_tokens=32*1024)
+    synthesizer = RepairTaskSynthesizer(api_key, base_url, model, max_tokens=32*1024, max_retries=max_retries)
 
     if difficulty_levels is None:
         difficulty_levels = [1, 2, 3]
@@ -291,7 +293,7 @@ def test_single_generation(
 
 
 if __name__ == "__main__":
-    main(max_workers=5, difficulty_levels=[1, 2, 3])
+    main(max_workers=5, difficulty_levels=[3], max_retries=6)
     
     # # 或者测试单个缺陷类型
     # task = test_single_generation(

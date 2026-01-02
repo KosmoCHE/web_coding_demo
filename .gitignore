@@ -1,5 +1,7 @@
 # data_demo_designbench/
-data_*/
+results*/
+log/
+data/
 config/api.yaml
 .DS_Store
 __pycache__/

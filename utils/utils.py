@@ -106,7 +106,7 @@ def save_screenshots(directory: str) -> List[str]:
                 )
                 
                 url = html_file.as_uri()
-                page.goto(url, wait_until="networkidle")
+                page.goto(url, wait_until="load")
                 page.wait_for_timeout(200)
                 
                 # 生成截图文件名（与html文件同名，扩展名改为.png）
@@ -381,4 +381,4 @@ def get_image_mime_type(file_path: str) -> str:
         ".webp": "image/webp",
     }
     
-    return mime_type_map.get(file_ext, "image/png")
+    return mime_type_map[file_ext]
